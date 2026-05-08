@@ -33,6 +33,9 @@ mybatis-plus:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 
+stock:
+  strategy: redis    # db = optimistic lock only, redis = Redis pre-deduct + DB
+
 springdoc:
   api-docs:
     path: /api-docs

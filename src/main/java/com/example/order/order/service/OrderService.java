@@ -40,6 +40,9 @@ public class OrderService {
         // 2. Deduct stock (throws if not enough)
         inventoryService.deductStock(request.getProductId(), request.getQuantity());
 
+        //!!!!!!!!!!!!!!!!!!!!!!!
+        //inventoryService.unsafeDeductStock(request.getProductId(), request.getQuantity());
+
         // 3. Build order
         OrderInfo order = new OrderInfo();
         order.setOrderNo(generateOrderNo());

@@ -1,13 +1,14 @@
 package com.example.order.inventory.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.example.order.common.BusinessException;
-import com.example.order.common.ResultCode;
 import com.example.order.inventory.entity.Inventory;
 import com.example.order.inventory.mapper.InventoryMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -15,46 +16,40 @@ import org.springframework.stereotype.Service;
 public class InventoryService {
 
     private final InventoryMapper inventoryMapper;
+    private final Map<String, StockDeductStrategy> strategyMap;
+    private final DbOptimisticLockStrategy dbStrategy;
+    private final RedisPreDeductStrategy redisStrategy;
 
     /**
-     * Query inventory by productId
+     * Switch strategy via application.yml:
+     * stock.strategy=db  or  stock.strategy=redis
      */
+    @Value("${stock.strategy:db}")
+    private String strategyType;
+
+    private StockDeductStrategy getStrategy() {
+        return "redis".equalsIgnoreCase(strategyType) ? redisStrategy : dbStrategy;
+    }
+
     public Inventory getByProductId(Long productId) {
         return inventoryMapper.selectOne(
                 new LambdaQueryWrapper<Inventory>()
                         .eq(Inventory::getProductId, productId));
     }
 
-    /**
-     * Deduct stock: available_stock - quantity, locked_stock + quantity
-     */
     public void deductStock(Long productId, int quantity) {
-        int rows = inventoryMapper.deductStock(productId, quantity);
-        if (rows == 0) {
-            throw new BusinessException(ResultCode.STOCK_NOT_ENOUGH);
-        }
-        log.info("Stock deducted: productId={}, quantity={}", productId, quantity);
+        getStrategy().deduct(productId, quantity);
     }
 
-    /**
-     * Rollback stock: locked_stock - quantity, available_stock + quantity
-     */
     public void rollbackStock(Long productId, int quantity) {
-        int rows = inventoryMapper.rollbackStock(productId, quantity);
-        if (rows == 0) {
-            log.warn("Rollback stock failed: productId={}, quantity={}", productId, quantity);
-        }
-        log.info("Stock rolled back: productId={}, quantity={}", productId, quantity);
+        getStrategy().rollback(productId, quantity);
     }
 
-    /**
-     * Confirm stock: locked_stock - quantity, total_stock - quantity
-     */
     public void confirmStock(Long productId, int quantity) {
-        int rows = inventoryMapper.confirmStock(productId, quantity);
-        if (rows == 0) {
-            log.warn("Confirm stock failed: productId={}, quantity={}", productId, quantity);
-        }
-        log.info("Stock confirmed: productId={}, quantity={}", productId, quantity);
+        getStrategy().confirm(productId, quantity);
+    }
+
+    public String currentStrategy() {
+        return getStrategy().name();
     }
 }

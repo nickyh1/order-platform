@@ -36,4 +36,15 @@ public interface InventoryMapper extends BaseMapper<Inventory> {
             "update_time = NOW() " +
             "WHERE product_id = #{productId} AND locked_stock >= #{quantity}")
     int confirmStock(@Param("productId") Long productId, @Param("quantity") int quantity);
+
+    /**
+     * UNSAFE: deduct stock without atomic check (for oversell demo only)
+     */
+    @Update("UPDATE inventory SET available_stock = #{newStock}, " +
+            "locked_stock = locked_stock + #{quantity}, " +
+            "update_time = NOW() " +
+            "WHERE product_id = #{productId}")
+    int unsafeDeductStock(@Param("productId") Long productId,
+                          @Param("newStock") int newStock,
+                          @Param("quantity") int quantity);
 }
