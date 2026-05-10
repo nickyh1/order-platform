@@ -1,6 +1,7 @@
 package com.example.order.order.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.order.common.IdempotentService;
 import com.example.order.common.Result;
 import com.example.order.order.entity.CreateOrderRequest;
 import com.example.order.order.entity.OrderInfo;
@@ -15,6 +16,15 @@ import org.springframework.web.bind.annotation.*;
 public class OrderController {
 
     private final OrderService orderService;
+    private final IdempotentService idempotentService;
+
+    /**
+     * Get idempotent token before placing order
+     */
+    @GetMapping("/token")
+    public Result<String> getToken() {
+        return Result.success(idempotentService.generateToken());
+    }
 
     /**
      * Create order

@@ -3,6 +3,7 @@ package com.example.order.order.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.order.common.BusinessException;
+import com.example.order.common.IdempotentService;
 import com.example.order.common.ResultCode;
 import com.example.order.inventory.service.InventoryService;
 import com.example.order.order.entity.CreateOrderRequest;
@@ -28,12 +29,19 @@ public class OrderService {
     private final OrderMapper orderMapper;
     private final ProductService productService;
     private final InventoryService inventoryService;
+    private final IdempotentService idempotentService;
 
     /**
      * Create order: validate product -> deduct stock -> create order
      */
     @Transactional(rollbackFor = Exception.class)
     public OrderInfo createOrder(CreateOrderRequest request) {
+
+        // 0. Idempotent check: consume token atomically
+        if (!idempotentService.validateAndConsume(request.getIdempotentToken())) {
+            throw new BusinessException(ResultCode.DUPLICATE_REQUEST);
+        }
+
         // 1. Validate product exists and is on shelf
         Product product = productService.getAvailableProduct(request.getProductId());
 
@@ -52,6 +60,7 @@ public class OrderService {
         order.setTotalAmount(product.getPrice().multiply(BigDecimal.valueOf(request.getQuantity())));
         order.setStatus(OrderStatus.PENDING.getValue());
         order.setExpireTime(LocalDateTime.now().plusMinutes(15));
+        order.setIdempotentKey(request.getIdempotentToken());
 
         // 4. Save order
         orderMapper.insert(order);
