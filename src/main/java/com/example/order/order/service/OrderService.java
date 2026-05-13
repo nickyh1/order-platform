@@ -5,7 +5,10 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.order.common.BusinessException;
 import com.example.order.common.IdempotentService;
 import com.example.order.common.ResultCode;
+import com.example.order.config.RabbitMQConfig;
 import com.example.order.inventory.service.InventoryService;
+import com.example.order.mq.OrderMessageProducer;
+import com.example.order.mq.entity.OrderMessageLog;
 import com.example.order.order.entity.CreateOrderRequest;
 import com.example.order.order.entity.OrderInfo;
 import com.example.order.order.entity.OrderStatus;
@@ -19,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -30,28 +34,26 @@ public class OrderService {
     private final ProductService productService;
     private final InventoryService inventoryService;
     private final IdempotentService idempotentService;
+    private final OrderMessageProducer messageProducer;
 
     /**
-     * Create order: validate product -> deduct stock -> create order
+     * Create order: validate -> idempotent check -> deduct stock -> create order -> save message log
+     * After transaction commits: send MQ messages
      */
     @Transactional(rollbackFor = Exception.class)
     public OrderInfo createOrder(CreateOrderRequest request) {
-
-        // 0. Idempotent check: consume token atomically
+        // 0. Idempotent check
         if (!idempotentService.validateAndConsume(request.getIdempotentToken())) {
             throw new BusinessException(ResultCode.DUPLICATE_REQUEST);
         }
 
-        // 1. Validate product exists and is on shelf
+        // 1. Validate product
         Product product = productService.getAvailableProduct(request.getProductId());
 
-        // 2. Deduct stock (throws if not enough)
+        // 2. Deduct stock
         inventoryService.deductStock(request.getProductId(), request.getQuantity());
 
-        //!!!!!!!!!!!!!!!!!!!!!!!
-        //inventoryService.unsafeDeductStock(request.getProductId(), request.getQuantity());
-
-        // 3. Build order
+        // 3. Build and save order
         OrderInfo order = new OrderInfo();
         order.setOrderNo(generateOrderNo());
         order.setUserId(request.getUserId());
@@ -59,13 +61,39 @@ public class OrderService {
         order.setQuantity(request.getQuantity());
         order.setTotalAmount(product.getPrice().multiply(BigDecimal.valueOf(request.getQuantity())));
         order.setStatus(OrderStatus.PENDING.getValue());
-        order.setExpireTime(LocalDateTime.now().plusMinutes(15));
         order.setIdempotentKey(request.getIdempotentToken());
-
-        // 4. Save order
+        order.setExpireTime(LocalDateTime.now().plusMinutes(15));
         orderMapper.insert(order);
+
+        // 4. Save message logs (INSIDE transaction)
+        Map<String, Object> payload = Map.of(
+                "orderNo", order.getOrderNo(),
+                "orderId", order.getId(),
+                "userId", order.getUserId(),
+                "productId", order.getProductId(),
+                "quantity", order.getQuantity(),
+                "totalAmount", order.getTotalAmount()
+        );
+
+        OrderMessageLog createdMsg = messageProducer.saveMessageLog(
+                order.getId(), "ORDER_CREATED", payload);
+
+        OrderMessageLog delayMsg = messageProducer.saveMessageLog(
+                order.getId(), "ORDER_TIMEOUT", payload);
+
         log.info("Order created: orderNo={}, userId={}, productId={}, quantity={}",
                 order.getOrderNo(), order.getUserId(), order.getProductId(), order.getQuantity());
+
+        // 5. Send MQ messages AFTER transaction commits
+        // Use TransactionSynchronization to ensure messages are sent only after commit
+        org.springframework.transaction.support.TransactionSynchronizationManager
+                .registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        messageProducer.sendMessage(createdMsg, RabbitMQConfig.RK_ORDER_CREATED);
+                        messageProducer.sendDelayMessage(delayMsg);
+                    }
+                });
 
         return order;
     }
