@@ -5,7 +5,9 @@ import com.example.order.common.Result;
 import com.example.order.inventory.entity.Inventory;
 import com.example.order.inventory.service.InventoryService;
 import com.example.order.product.entity.Product;
+import com.example.order.product.entity.UpdateProductRequest;
 import com.example.order.product.service.ProductService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -24,13 +26,24 @@ public class ProductController {
         return Result.success(productService.listProducts(pageNum, pageSize));
     }
 
+    /**
+     * Get product detail (with cache)
+     */
     @GetMapping("/{id}")
     public Result<Product> detail(@PathVariable Long id) {
-        return Result.success(productService.getById(id));
+        return Result.success(productService.getByIdWithCache(id));
     }
 
     @GetMapping("/{id}/stock")
     public Result<Inventory> stock(@PathVariable Long id) {
         return Result.success(inventoryService.getByProductId(id));
+    }
+
+    /**
+     * Update product (with delayed double delete for cache consistency)
+     */
+    @PutMapping
+    public Result<Product> update(@Valid @RequestBody UpdateProductRequest request) {
+        return Result.success(productService.updateProduct(request));
     }
 }
