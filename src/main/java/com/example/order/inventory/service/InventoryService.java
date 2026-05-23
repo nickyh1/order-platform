@@ -1,8 +1,10 @@
 package com.example.order.inventory.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.order.common.BusinessException;
 import com.example.order.inventory.entity.Inventory;
 import com.example.order.inventory.mapper.InventoryMapper;
+import com.example.order.monitor.OrderMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,6 +21,7 @@ public class InventoryService {
     private final Map<String, StockDeductStrategy> strategyMap;
     private final DbOptimisticLockStrategy dbStrategy;
     private final RedisPreDeductStrategy redisStrategy;
+    private final OrderMetrics orderMetrics;
 
     /**
      * Switch strategy via application.yml:
@@ -38,7 +41,12 @@ public class InventoryService {
     }
 
     public void deductStock(Long productId, int quantity) {
-        getStrategy().deduct(productId, quantity);
+        try {
+            getStrategy().deduct(productId, quantity);
+        } catch (BusinessException e) {
+            orderMetrics.getStockDeductFailCounter().increment();
+            throw e;
+        }
     }
 
     public void rollbackStock(Long productId, int quantity) {

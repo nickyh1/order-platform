@@ -18,7 +18,9 @@ public enum ResultCode {
     STOCK_NOT_ENOUGH(1003, "Stock not enough"),
     ORDER_NOT_FOUND(1004, "Order not found"),
     ORDER_STATUS_INVALID(1005, "Order status transition not allowed"),
+    RATE_LIMITED(1007, "Too many requests, please try again later"),
     DUPLICATE_REQUEST(1006, "Duplicate request, please do not resubmit");
+
 
     private final int code;
     private final String message;

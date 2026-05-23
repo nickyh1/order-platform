@@ -2,7 +2,7 @@ package com.example.order.product.service;
 
 import com.example.order.product.entity.Product;
 import com.example.order.product.mapper.ProductMapper;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.ibatis.annotations.Mapper;

@@ -2,6 +2,7 @@ package com.example.order.mq;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.order.config.RabbitMQConfig;
+import com.example.order.monitor.OrderMetrics;
 import com.example.order.mq.entity.OrderMessageLog;
 import com.example.order.mq.mapper.OrderMessageLogMapper;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +21,7 @@ public class MessageRetryTask {
 
     private final OrderMessageLogMapper messageLogMapper;
     private final RabbitTemplate rabbitTemplate;
+    private final OrderMetrics orderMetrics;
 
     /**
      * Every 30 seconds, scan PENDING messages and retry sending.
@@ -51,6 +53,7 @@ public class MessageRetryTask {
                 msg.setStatus("SENT");
                 msg.setRetryCount(msg.getRetryCount() + 1);
                 messageLogMapper.updateById(msg);
+                orderMetrics.getMessageRetryCounter().increment();
                 log.info("Retry success: messageId={}, type={}", msg.getMessageId(), msg.getMessageType());
 
             } catch (Exception e) {

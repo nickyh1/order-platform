@@ -7,6 +7,7 @@ import com.example.order.common.IdempotentService;
 import com.example.order.common.ResultCode;
 import com.example.order.config.RabbitMQConfig;
 import com.example.order.inventory.service.InventoryService;
+import com.example.order.monitor.OrderMetrics;
 import com.example.order.mq.OrderMessageProducer;
 import com.example.order.mq.entity.OrderMessageLog;
 import com.example.order.order.entity.CreateOrderRequest;
@@ -19,6 +20,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import io.micrometer.core.instrument.Timer;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -35,6 +37,7 @@ public class OrderService {
     private final InventoryService inventoryService;
     private final IdempotentService idempotentService;
     private final OrderMessageProducer messageProducer;
+    private final OrderMetrics orderMetrics;
 
     /**
      * Create order: validate -> idempotent check -> deduct stock -> create order -> save message log
@@ -42,60 +45,71 @@ public class OrderService {
      */
     @Transactional(rollbackFor = Exception.class)
     public OrderInfo createOrder(CreateOrderRequest request) {
-        // 0. Idempotent check
-        if (!idempotentService.validateAndConsume(request.getIdempotentToken())) {
-            throw new BusinessException(ResultCode.DUPLICATE_REQUEST);
+        Timer.Sample sample = Timer.start();
+
+        try {
+            // 0. Idempotent check
+            if (!idempotentService.validateAndConsume(request.getIdempotentToken())) {
+                orderMetrics.getIdempotentRejectCounter().increment();
+                throw new BusinessException(ResultCode.DUPLICATE_REQUEST);
+            }
+
+            // 1. Validate product
+            Product product = productService.getAvailableProduct(request.getProductId());
+
+            // 2. Deduct stock
+            inventoryService.deductStock(request.getProductId(), request.getQuantity());
+
+            // 3. Build and save order
+            OrderInfo order = new OrderInfo();
+            order.setOrderNo(generateOrderNo());
+            order.setUserId(request.getUserId());
+            order.setProductId(request.getProductId());
+            order.setQuantity(request.getQuantity());
+            order.setTotalAmount(product.getPrice().multiply(BigDecimal.valueOf(request.getQuantity())));
+            order.setStatus(OrderStatus.PENDING.getValue());
+            order.setIdempotentKey(request.getIdempotentToken());
+            order.setExpireTime(LocalDateTime.now().plusMinutes(15));
+            orderMapper.insert(order);
+
+            // 4. Save message logs (inside transaction)
+            Map<String, Object> payload = Map.of(
+                    "orderNo", order.getOrderNo(),
+                    "orderId", order.getId(),
+                    "userId", order.getUserId(),
+                    "productId", order.getProductId(),
+                    "quantity", order.getQuantity(),
+                    "totalAmount", order.getTotalAmount()
+            );
+
+            OrderMessageLog createdMsg = messageProducer.saveMessageLog(
+                    order.getId(), "ORDER_CREATED", payload);
+            OrderMessageLog delayMsg = messageProducer.saveMessageLog(
+                    order.getId(), "ORDER_TIMEOUT", payload);
+
+            log.info("Order created: orderNo={}, userId={}, productId={}, quantity={}",
+                    order.getOrderNo(), order.getUserId(), order.getProductId(), order.getQuantity());
+
+            // 5. Send MQ after commit
+            org.springframework.transaction.support.TransactionSynchronizationManager
+                    .registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            messageProducer.sendMessage(createdMsg, RabbitMQConfig.RK_ORDER_CREATED);
+                            messageProducer.sendDelayMessage(delayMsg);
+                        }
+                    });
+
+            // 6. Record metrics
+            orderMetrics.getOrderSuccessCounter().increment();
+            return order;
+
+        } catch (BusinessException e) {
+            orderMetrics.getOrderFailCounter().increment();
+            throw e;
+        } finally {
+            sample.stop(orderMetrics.getOrderCreateTimer());
         }
-
-        // 1. Validate product
-        Product product = productService.getAvailableProduct(request.getProductId());
-
-        // 2. Deduct stock
-        inventoryService.deductStock(request.getProductId(), request.getQuantity());
-
-        // 3. Build and save order
-        OrderInfo order = new OrderInfo();
-        order.setOrderNo(generateOrderNo());
-        order.setUserId(request.getUserId());
-        order.setProductId(request.getProductId());
-        order.setQuantity(request.getQuantity());
-        order.setTotalAmount(product.getPrice().multiply(BigDecimal.valueOf(request.getQuantity())));
-        order.setStatus(OrderStatus.PENDING.getValue());
-        order.setIdempotentKey(request.getIdempotentToken());
-        order.setExpireTime(LocalDateTime.now().plusMinutes(15));
-        orderMapper.insert(order);
-
-        // 4. Save message logs (INSIDE transaction)
-        Map<String, Object> payload = Map.of(
-                "orderNo", order.getOrderNo(),
-                "orderId", order.getId(),
-                "userId", order.getUserId(),
-                "productId", order.getProductId(),
-                "quantity", order.getQuantity(),
-                "totalAmount", order.getTotalAmount()
-        );
-
-        OrderMessageLog createdMsg = messageProducer.saveMessageLog(
-                order.getId(), "ORDER_CREATED", payload);
-
-        OrderMessageLog delayMsg = messageProducer.saveMessageLog(
-                order.getId(), "ORDER_TIMEOUT", payload);
-
-        log.info("Order created: orderNo={}, userId={}, productId={}, quantity={}",
-                order.getOrderNo(), order.getUserId(), order.getProductId(), order.getQuantity());
-
-        // 5. Send MQ messages AFTER transaction commits
-        // Use TransactionSynchronization to ensure messages are sent only after commit
-        org.springframework.transaction.support.TransactionSynchronizationManager
-                .registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
-                    @Override
-                    public void afterCommit() {
-                        messageProducer.sendMessage(createdMsg, RabbitMQConfig.RK_ORDER_CREATED);
-                        messageProducer.sendDelayMessage(delayMsg);
-                    }
-                });
-
-        return order;
     }
 
     /**
