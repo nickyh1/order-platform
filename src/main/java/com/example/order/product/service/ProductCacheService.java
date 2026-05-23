@@ -8,6 +8,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.ibatis.annotations.Mapper;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -19,6 +22,8 @@ public class ProductCacheService {
     private final StringRedisTemplate redisTemplate;
     private final ProductMapper productMapper;
     private final ObjectMapper objectMapper;
+    private final ScheduledExecutorService scheduler =
+            Executors.newSingleThreadScheduledExecutor();
 
     private static final String CACHE_KEY_PREFIX = "product:detail:";
     private static final long CACHE_TTL_MINUTES = 30;
@@ -48,20 +53,8 @@ public class ProductCacheService {
      * between our DB update and cache delete.
      */
     public void evictCacheWithDelay(Long productId) {
-        // First delete
         evictCache(productId);
-
-        // Schedule second delete after 500ms
-        new Thread(() -> {
-            try {
-                Thread.sleep(500);
-                evictCache(productId);
-                log.info("Delayed double delete completed: productId={}", productId);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("Delayed delete interrupted: productId={}", productId);
-            }
-        }).start();
+        scheduler.schedule(() -> evictCache(productId), 500, TimeUnit.MILLISECONDS);
     }
 
     /**
