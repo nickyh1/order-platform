@@ -15,6 +15,14 @@ public class RedisPreDeductStrategy implements StockDeductStrategy {
     private final StockCacheService stockCacheService;
     private final InventoryMapper inventoryMapper;
 
+    /**
+     * Only rollback Redis, not DB (DB already rolled back by transaction).
+     */
+    public void compensateRedisOnly(Long productId, int quantity) {
+        stockCacheService.rollback(productId, quantity);
+        log.info("[Redis-Pre] Redis compensated after transaction rollback: productId={}, quantity={}", productId, quantity);
+    }
+
     @Override
     public void deduct(Long productId, int quantity) {
         // Step 1: Redis atomic deduct

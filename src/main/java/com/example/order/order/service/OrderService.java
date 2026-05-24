@@ -21,6 +21,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import io.micrometer.core.instrument.Timer;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -59,6 +61,19 @@ public class OrderService {
 
             // 2. Deduct stock
             inventoryService.deductStock(request.getProductId(), request.getQuantity());
+
+            // Register rollback hook: if transaction rolls back, compensate Redis
+            final Long productId = request.getProductId();
+            final int quantity = request.getQuantity();
+            org.springframework.transaction.support.TransactionSynchronizationManager
+                    .registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            if (status == STATUS_ROLLED_BACK) {
+                                inventoryService.compensateRedis(productId, quantity);
+                            }
+                        }
+                    });
 
             // 3. Build and save order
             OrderInfo order = new OrderInfo();

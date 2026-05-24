@@ -54,22 +54,28 @@ public class OrderMessageProducer {
      */
     public void sendMessage(OrderMessageLog msgLog, String routingKey) {
         try {
-            rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, routingKey, msgLog.getPayload());
+            rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, routingKey, msgLog.getPayload(), message -> {
+                message.getMessageProperties().setHeader("messageId", msgLog.getMessageId());
+                return message;
+            });
             msgLog.setStatus("SENT");
             messageLogMapper.updateById(msgLog);
             log.info("Message sent: messageId={}, routingKey={}", msgLog.getMessageId(), routingKey);
         } catch (Exception e) {
             log.error("Failed to send message: messageId={}, will be retried", msgLog.getMessageId(), e);
-            // Leave status as PENDING, retry task will pick it up
         }
     }
+
 
     /**
      * Send order to delay queue (for timeout detection).
      */
     public void sendDelayMessage(OrderMessageLog msgLog) {
         try {
-            rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, "order.delay", msgLog.getPayload());
+            rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, "order.delay", msgLog.getPayload(), message -> {
+                message.getMessageProperties().setHeader("messageId", msgLog.getMessageId());
+                return message;
+            });
             msgLog.setStatus("SENT");
             messageLogMapper.updateById(msgLog);
             log.info("Delay message sent: messageId={}, orderId={}", msgLog.getMessageId(), msgLog.getOrderId());

@@ -33,6 +33,13 @@ spring:
     port: 5672
     username: guest
     password: guest
+    listener:
+      simple:
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 5000
+        default-requeue-rejected: false
 
   flyway:
     enabled: true

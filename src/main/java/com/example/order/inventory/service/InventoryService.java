@@ -24,6 +24,20 @@ public class InventoryService {
     private final OrderMetrics orderMetrics;
 
     /**
+     * Compensate Redis stock when transaction rolls back.
+     * Only needed for Redis pre-deduct strategy.
+     */
+    public void compensateRedis(Long productId, int quantity) {
+        if ("redis".equalsIgnoreCase(strategyType)) {
+            try {
+                redisStrategy.compensateRedisOnly(productId, quantity);
+            } catch (Exception e) {
+                log.error("Failed to compensate Redis stock: productId={}, quantity={}", productId, quantity, e);
+            }
+        }
+    }
+
+    /**
      * Switch strategy via application.yml:
      * stock.strategy=db  or  stock.strategy=redis
      */
