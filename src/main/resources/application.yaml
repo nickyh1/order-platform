@@ -1,7 +1,10 @@
 # src/main/resources/application.yml
 server:
   port: 8080
-
+#logging:
+  #level:
+    # 关掉某个包的 info
+    #com.example.myapp.controller: WARN
 management:
   endpoints:
     web:

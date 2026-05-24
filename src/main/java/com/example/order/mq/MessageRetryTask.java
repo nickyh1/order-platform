@@ -44,11 +44,12 @@ public class MessageRetryTask {
         for (OrderMessageLog msg : pendingMessages) {
             try {
                 String routingKey = getRoutingKey(msg.getMessageType());
-                if ("order.delay".equals(routingKey)) {
-                    rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, routingKey, msg.getPayload());
-                } else {
-                    rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, routingKey, msg.getPayload());
-                }
+
+                // Send with messageId header
+                rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, routingKey, msg.getPayload(), message -> {
+                    message.getMessageProperties().setHeader("messageId", msg.getMessageId());
+                    return message;
+                });
 
                 msg.setStatus("SENT");
                 msg.setRetryCount(msg.getRetryCount() + 1);
