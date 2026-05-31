@@ -29,7 +29,8 @@ public class MqConfirmCallback implements RabbitTemplate.ConfirmCallback, Rabbit
         }
         String messageId = correlationData.getId();
         if (ack) {
-            // Only advance from PENDING/FAILED → SENT; never overwrite CONSUMED
+            // Only advance from PENDING/FAILED → SENT; never overwrite CONSUMED or RETURNED.
+            // Excluding RETURNED prevents a confirm-ack from re-marking an unroutable message as SENT.
             messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
                     .eq(OrderMessageLog::getMessageId, messageId)
                     .in(OrderMessageLog::getStatus, "PENDING", "FAILED")
@@ -49,13 +50,14 @@ public class MqConfirmCallback implements RabbitTemplate.ConfirmCallback, Rabbit
                     returned.getExchange(), returned.getRoutingKey());
             return;
         }
-        // Message reached the exchange but couldn't be routed to any queue; reset to PENDING
-        // so the retry task re-sends it, and push next_retry_time to avoid immediate re-fire.
+        // Message reached the exchange but couldn't be routed to any queue.
+        // Use RETURNED (not PENDING) so that a subsequent confirm-ack (which only transitions
+        // PENDING/FAILED → SENT) cannot overwrite it. The retry task will pick up RETURNED.
         messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
                 .eq(OrderMessageLog::getMessageId, messageId)
                 .setSql("next_retry_time = DATE_ADD(NOW(), INTERVAL 30 SECOND)")
-                .set(OrderMessageLog::getStatus, "PENDING"));
-        log.warn("[MQ-Return] Message unroutable, reset to PENDING: messageId={}, exchange={}, routingKey={}, replyText={}",
+                .set(OrderMessageLog::getStatus, "RETURNED"));
+        log.warn("[MQ-Return] Message unroutable, reset to RETURNED: messageId={}, exchange={}, routingKey={}, replyText={}",
                 messageId, returned.getExchange(), returned.getRoutingKey(), returned.getReplyText());
     }
 }

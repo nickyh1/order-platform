@@ -1,6 +1,6 @@
 package com.example.order.mq;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.order.config.RabbitMQConfig;
 import com.example.order.inventory.service.InventoryService;
 import com.example.order.mq.entity.OrderMessageLog;
@@ -34,16 +34,15 @@ public class OrderTimeoutConsumer {
         log.info("Received ORDER_TIMEOUT: messageId={}", messageId);
 
         try {
-            // Consumer idempotent: check by messageId
-            OrderMessageLog msgLog = null;
+            // Atomically claim the message: SENT/PENDING → CONSUMING.
+            // If rows == 0, another thread already claimed or consumed it — skip safely.
             if (messageId != null) {
-                msgLog = messageLogMapper.selectOne(
-                        new LambdaQueryWrapper<OrderMessageLog>()
-                                .eq(OrderMessageLog::getMessageId, messageId)
-                );
-
-                if (msgLog != null && "CONSUMED".equals(msgLog.getStatus())) {
-                    log.info("Timeout message already consumed, skipping: messageId={}", messageId);
+                int claimed = messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                        .eq(OrderMessageLog::getMessageId, messageId)
+                        .in(OrderMessageLog::getStatus, "SENT", "PENDING")
+                        .set(OrderMessageLog::getStatus, "CONSUMING"));
+                if (claimed == 0) {
+                    log.info("Timeout message already claimed or consumed, skipping: messageId={}", messageId);
                     return;
                 }
             }
@@ -58,25 +57,32 @@ public class OrderTimeoutConsumer {
             int rows = orderMapper.updateStatusFromPending(orderNo, OrderStatus.TIMEOUT.getValue());
             if (rows == 0) {
                 log.info("Order {} already processed, skip timeout", orderNo);
-                if (msgLog != null) {
-                    msgLog.setStatus("CONSUMED");
-                    messageLogMapper.updateById(msgLog);
+                if (messageId != null) {
+                    messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                            .eq(OrderMessageLog::getMessageId, messageId)
+                            .set(OrderMessageLog::getStatus, "CONSUMED"));
                 }
                 return;
             }
 
             inventoryService.rollbackStock(productId, quantity);
 
-            // Mark consumed
-            if (msgLog != null) {
-                msgLog.setStatus("CONSUMED");
-                messageLogMapper.updateById(msgLog);
+            if (messageId != null) {
+                messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                        .eq(OrderMessageLog::getMessageId, messageId)
+                        .set(OrderMessageLog::getStatus, "CONSUMED"));
             }
-
             log.info("Order timeout processed: orderNo={}, messageId={}", orderNo, messageId);
 
         } catch (Exception e) {
             log.error("Failed to process order timeout: messageId={}", messageId, e);
+            // Roll CONSUMING back to FAILED so the retry task can re-deliver
+            if (messageId != null) {
+                messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                        .eq(OrderMessageLog::getMessageId, messageId)
+                        .eq(OrderMessageLog::getStatus, "CONSUMING")
+                        .set(OrderMessageLog::getStatus, "FAILED"));
+            }
             throw new RuntimeException("Timeout processing failed", e);
         }
     }
