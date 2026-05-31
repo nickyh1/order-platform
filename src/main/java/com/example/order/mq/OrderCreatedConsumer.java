@@ -1,6 +1,6 @@
 package com.example.order.mq;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.order.config.RabbitMQConfig;
 import com.example.order.mq.entity.OrderMessageLog;
 import com.example.order.mq.mapper.OrderMessageLogMapper;
@@ -23,15 +23,16 @@ public class OrderCreatedConsumer {
         String messageId = (String) message.getMessageProperties().getHeader("messageId");
         log.info("Received ORDER_CREATED: messageId={}", messageId);
 
-        // Consumer idempotent: check by messageId (uses unique index, fast)
+        // Consumer idempotent: atomically claim the message by transitioning SENT/PENDING → CONSUMING.
+        // If rows == 0 another thread already claimed or consumed it — skip safely.
         if (messageId != null) {
-            OrderMessageLog msgLog = messageLogMapper.selectOne(
-                    new LambdaQueryWrapper<OrderMessageLog>()
-                            .eq(OrderMessageLog::getMessageId, messageId)
-            );
+            int claimed = messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                    .eq(OrderMessageLog::getMessageId, messageId)
+                    .in(OrderMessageLog::getStatus, "SENT", "PENDING")
+                    .set(OrderMessageLog::getStatus, "CONSUMING"));
 
-            if (msgLog != null && "CONSUMED".equals(msgLog.getStatus())) {
-                log.info("Message already consumed, skipping: messageId={}", messageId);
+            if (claimed == 0) {
+                log.info("Message already claimed or consumed, skipping: messageId={}", messageId);
                 return;
             }
 
@@ -39,10 +40,9 @@ public class OrderCreatedConsumer {
             log.info("Processing ORDER_CREATED: {}", payload);
 
             // Mark as consumed
-            if (msgLog != null) {
-                msgLog.setStatus("CONSUMED");
-                messageLogMapper.updateById(msgLog);
-            }
+            messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                    .eq(OrderMessageLog::getMessageId, messageId)
+                    .set(OrderMessageLog::getStatus, "CONSUMED"));
         }
     }
 }

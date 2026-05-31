@@ -13,7 +13,7 @@
 - Micrometer + Prometheus + Grafana
 - SpringDoc OpenAPI (Swagger)
 - Flyway（数据库版本管理）
-- JMeter（压测）
+- JUnit 并发测试 / 手工压测
 
 ## 系统架构
 ![架构图](./docs/images/architecture.png)
