@@ -26,7 +26,7 @@ public class OrderController {
      * DO NOT use in production.
      */
     @PostMapping("/stress-test")
-    public Result<OrderInfo> stressTestOrder(@RequestBody CreateOrderRequest request) {
+    public Result<OrderInfo> stressTestOrder(@Valid @RequestBody CreateOrderRequest request) {
         // Rate limit check
         String rateLimitKey = "rate_limit:order:" + request.getUserId();
         if (!rateLimitService.isAllowed(rateLimitKey, 100, 1)) {

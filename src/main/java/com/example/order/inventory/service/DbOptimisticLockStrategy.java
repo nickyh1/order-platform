@@ -25,13 +25,19 @@ public class DbOptimisticLockStrategy implements StockDeductStrategy {
 
     @Override
     public void rollback(Long productId, int quantity) {
-        inventoryMapper.rollbackStock(productId, quantity);
+        int rows = inventoryMapper.rollbackStock(productId, quantity);
+        if (rows == 0) {
+            throw new BusinessException(ResultCode.STOCK_ROLLBACK_FAILED);
+        }
         log.info("[DB-Lock] Stock rolled back: productId={}, quantity={}", productId, quantity);
     }
 
     @Override
     public void confirm(Long productId, int quantity) {
-        inventoryMapper.confirmStock(productId, quantity);
+        int rows = inventoryMapper.confirmStock(productId, quantity);
+        if (rows == 0) {
+            throw new BusinessException(ResultCode.STOCK_CONFIRM_FAILED);
+        }
         log.info("[DB-Lock] Stock confirmed: productId={}, quantity={}", productId, quantity);
     }
 

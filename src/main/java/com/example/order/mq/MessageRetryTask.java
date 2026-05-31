@@ -7,6 +7,7 @@ import com.example.order.mq.entity.OrderMessageLog;
 import com.example.order.mq.mapper.OrderMessageLogMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -25,6 +26,7 @@ public class MessageRetryTask {
 
     /**
      * Every 30 seconds, scan PENDING messages and retry sending.
+     * Status is NOT updated to SENT here — MqConfirmCallback handles that after broker ack.
      */
     @Scheduled(fixedDelay = 30000)
     public void retryPendingMessages() {
@@ -45,17 +47,21 @@ public class MessageRetryTask {
             try {
                 String routingKey = getRoutingKey(msg.getMessageType());
 
-                // Send with messageId header
-                rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, routingKey, msg.getPayload(), message -> {
-                    message.getMessageProperties().setHeader("messageId", msg.getMessageId());
-                    return message;
-                });
+                // Send with CorrelationData so MqConfirmCallback can update status to SENT on broker ack
+                CorrelationData correlationData = new CorrelationData(msg.getMessageId());
+                rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, routingKey, msg.getPayload(),
+                        message -> {
+                            message.getMessageProperties().setHeader("messageId", msg.getMessageId());
+                            return message;
+                        }, correlationData);
 
-                msg.setStatus("SENT");
+                // Only advance retry counter and next check time — SENT is set by MqConfirmCallback on ack
                 msg.setRetryCount(msg.getRetryCount() + 1);
+                msg.setNextRetryTime(LocalDateTime.now().plusSeconds(30L * (msg.getRetryCount() + 1)));
                 messageLogMapper.updateById(msg);
                 orderMetrics.getMessageRetryCounter().increment();
-                log.info("Retry success: messageId={}, type={}", msg.getMessageId(), msg.getMessageType());
+                log.info("Retry sent, awaiting broker confirm: messageId={}, type={}, retryCount={}",
+                        msg.getMessageId(), msg.getMessageType(), msg.getRetryCount());
 
             } catch (Exception e) {
                 msg.setRetryCount(msg.getRetryCount() + 1);

@@ -59,7 +59,10 @@ public class RedisPreDeductStrategy implements StockDeductStrategy {
     @Override
     public void rollback(Long productId, int quantity) {
         // DB rollback inside transaction
-        inventoryMapper.rollbackStock(productId, quantity);
+        int rows = inventoryMapper.rollbackStock(productId, quantity);
+        if (rows == 0) {
+            throw new BusinessException(ResultCode.STOCK_ROLLBACK_FAILED);
+        }
         log.info("[Redis-Pre] DB stock rolled back: productId={}, quantity={}", productId, quantity);
 
         // Redis INCR deferred to afterCommit: if DB transaction rolls back, Redis stays unchanged
@@ -79,7 +82,10 @@ public class RedisPreDeductStrategy implements StockDeductStrategy {
     @Override
     public void confirm(Long productId, int quantity) {
         // Confirm DB only (Redis stock already deducted, no need to change)
-        inventoryMapper.confirmStock(productId, quantity);
+        int rows = inventoryMapper.confirmStock(productId, quantity);
+        if (rows == 0) {
+            throw new BusinessException(ResultCode.STOCK_CONFIRM_FAILED);
+        }
         log.info("[Redis-Pre] Stock confirmed: productId={}, quantity={}", productId, quantity);
     }
 

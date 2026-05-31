@@ -53,6 +53,7 @@ public class RabbitMQConfig {
         template.setMessageConverter(jsonMessageConverter());
         template.setConfirmCallback(confirmCallback);
         template.setReturnsCallback(confirmCallback);
+        template.setMandatory(true);
         return template;
     }
 
