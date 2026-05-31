@@ -11,6 +11,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Slf4j
 @Service
@@ -54,8 +56,14 @@ public class ProductService {
         productMapper.updateById(product);
         log.info("Product updated in DB: productId={}", product.getId());
 
-        // Delete cache after DB update
-        productCacheService.evictCacheWithDelay(product.getId());
+        // Evict cache only after transaction commits to avoid stale DB + evicted cache mismatch
+        final Long productId = product.getId();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                productCacheService.evictCacheWithDelay(productId);
+            }
+        });
 
         return product;
     }

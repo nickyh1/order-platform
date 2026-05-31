@@ -1,9 +1,15 @@
 package com.example.order;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.order.common.IdempotentService;
 import com.example.order.inventory.entity.Inventory;
+import com.example.order.inventory.mapper.InventoryMapper;
 import com.example.order.inventory.service.InventoryService;
+import com.example.order.inventory.service.StockCacheService;
 import com.example.order.order.entity.CreateOrderRequest;
+import com.example.order.order.entity.OrderInfo;
+import com.example.order.order.mapper.OrderMapper;
 import com.example.order.order.service.OrderService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,26 +20,34 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 @SpringBootTest
 public class ConcurrentOrderTest {
 
-    @Autowired
-    private OrderService orderService;
-
-    @Autowired
-    private InventoryService inventoryService;
-
-    @Autowired
-    private IdempotentService idempotentService;
+    @Autowired private OrderService orderService;
+    @Autowired private InventoryService inventoryService;
+    @Autowired private InventoryMapper inventoryMapper;
+    @Autowired private StockCacheService stockCacheService;
+    @Autowired private OrderMapper orderMapper;
+    @Autowired private IdempotentService idempotentService;
 
     /**
-     * Test idempotent: same token, 20 concurrent requests, only 1 should succeed.
+     * Test idempotent: same token, 20 concurrent requests, exactly 1 should succeed.
      */
     @Test
     void testIdempotent() throws InterruptedException {
-        // Generate ONE token
+        Long productId = 1L;
+
+        // Ensure enough stock for this test (at least 1 unit)
+        inventoryMapper.update(null, new LambdaUpdateWrapper<Inventory>()
+                .eq(Inventory::getProductId, productId)
+                .set(Inventory::getAvailableStock, 100)
+                .set(Inventory::getLockedStock, 0)
+                .set(Inventory::getTotalStock, 100));
+        stockCacheService.setStock(productId, 100);
+
         String token = idempotentService.generateToken();
-        System.out.println("Token: " + token);
 
         int threadCount = 20;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
@@ -50,9 +64,9 @@ public class ConcurrentOrderTest {
                     start.await();
                     CreateOrderRequest request = new CreateOrderRequest();
                     request.setUserId(1L);
-                    request.setProductId(1L);
+                    request.setProductId(productId);
                     request.setQuantity(1);
-                    request.setIdempotentToken(token); // ALL threads use SAME token
+                    request.setIdempotentToken(token);
                     orderService.createOrder(request);
                     successCount.incrementAndGet();
                 } catch (Exception e) {
@@ -73,24 +87,31 @@ public class ConcurrentOrderTest {
         System.out.println("Total threads:    " + threadCount);
         System.out.println("Success orders:   " + successCount.get());
         System.out.println("Failed orders:    " + failCount.get());
-
-        if (successCount.get() == 1) {
-            System.out.println(">>> IDEMPOTENT OK! Only 1 order created.");
-        } else {
-            System.out.println(">>> PROBLEM: " + successCount.get() + " orders created!");
-        }
         System.out.println("=============================================");
+
+        assertEquals(1, successCount.get(), "Idempotent token must produce exactly 1 successful order");
+        assertEquals(threadCount - 1, failCount.get(), "All remaining requests must be rejected");
     }
 
     /**
-     * Oversell test (keep for regression).
-     * Before running: UPDATE inventory SET available_stock=5, locked_stock=0, total_stock=5 WHERE product_id=5;
-     *                 DELETE FROM orders WHERE product_id=5;
+     * Oversell prevention test: 50 threads competing for 5 items.
+     * Setup is automatic — inventory is reset before the test runs.
      */
     @Test
     void testOversell() throws InterruptedException {
         Long productId = 5L;
+        int initialStock = 5;
         int threadCount = 50;
+
+        // Auto-setup: reset inventory and clear orders for product 5
+        inventoryMapper.update(null, new LambdaUpdateWrapper<Inventory>()
+                .eq(Inventory::getProductId, productId)
+                .set(Inventory::getAvailableStock, initialStock)
+                .set(Inventory::getLockedStock, 0)
+                .set(Inventory::getTotalStock, initialStock));
+        stockCacheService.setStock(productId, initialStock);
+        orderMapper.delete(new LambdaQueryWrapper<OrderInfo>()
+                .eq(OrderInfo::getProductId, productId));
 
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         CountDownLatch ready = new CountDownLatch(threadCount);
@@ -105,7 +126,6 @@ public class ConcurrentOrderTest {
                 try {
                     ready.countDown();
                     start.await();
-                    // Each thread gets its OWN token (different users)
                     String token = idempotentService.generateToken();
                     CreateOrderRequest request = new CreateOrderRequest();
                     request.setUserId(userId);
@@ -130,18 +150,20 @@ public class ConcurrentOrderTest {
         Inventory inventory = inventoryService.getByProductId(productId);
 
         System.out.println("========== OVERSELL TEST RESULT ==========");
+        System.out.println("Initial stock:    " + initialStock);
         System.out.println("Total threads:    " + threadCount);
         System.out.println("Success orders:   " + successCount.get());
         System.out.println("Failed orders:    " + failCount.get());
         System.out.println("Available stock:  " + inventory.getAvailableStock());
         System.out.println("Locked stock:     " + inventory.getLockedStock());
         System.out.println("Total stock:      " + inventory.getTotalStock());
-
-        if (successCount.get() > 5) {
-            System.out.println(">>> OVERSELL DETECTED!");
-        } else {
-            System.out.println(">>> No oversell.");
-        }
         System.out.println("==========================================");
+
+        assertTrue(successCount.get() <= initialStock,
+                "Successful orders (" + successCount.get() + ") must not exceed initial stock (" + initialStock + ")");
+        assertTrue(inventory.getAvailableStock() >= 0,
+                "Available stock must not go negative");
+        assertEquals(initialStock, successCount.get() + inventory.getAvailableStock() + inventory.getLockedStock(),
+                "Stock accounting must balance: initial = sold + available + locked");
     }
 }
