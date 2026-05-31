@@ -3,10 +3,10 @@ package com.example.order.mq;
 import com.example.order.config.RabbitMQConfig;
 import com.example.order.mq.entity.OrderMessageLog;
 import com.example.order.mq.mapper.OrderMessageLogMapper;
-import org.apache.ibatis.annotations.Mapper;
 import tools.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
@@ -17,7 +17,6 @@ import java.util.UUID;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@Mapper
 public class OrderMessageProducer {
 
     private final RabbitTemplate rabbitTemplate;
@@ -38,7 +37,8 @@ public class OrderMessageProducer {
             msgLog.setStatus("PENDING");
             msgLog.setRetryCount(0);
             msgLog.setMaxRetry(3);
-            msgLog.setNextRetryTime(LocalDateTime.now());
+            // Give broker confirm ack 30s to arrive before retry task picks this up
+            msgLog.setNextRetryTime(LocalDateTime.now().plusSeconds(30));
             messageLogMapper.insert(msgLog);
             log.info("Message log saved: messageId={}, type={}, orderId={}", msgLog.getMessageId(), messageType, orderId);
             return msgLog;
@@ -49,38 +49,38 @@ public class OrderMessageProducer {
     }
 
     /**
-     * Send message to RabbitMQ and update log status.
+     * Send message to RabbitMQ. Status stays PENDING until broker ack via MqConfirmCallback.
      * Called AFTER transaction commits.
      */
     public void sendMessage(OrderMessageLog msgLog, String routingKey) {
         try {
-            rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, routingKey, msgLog.getPayload(), message -> {
-                message.getMessageProperties().setHeader("messageId", msgLog.getMessageId());
-                return message;
-            });
-            msgLog.setStatus("SENT");
-            messageLogMapper.updateById(msgLog);
-            log.info("Message sent: messageId={}, routingKey={}", msgLog.getMessageId(), routingKey);
+            CorrelationData correlationData = new CorrelationData(msgLog.getMessageId());
+            rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, routingKey, msgLog.getPayload(),
+                    message -> {
+                        message.getMessageProperties().setHeader("messageId", msgLog.getMessageId());
+                        return message;
+                    }, correlationData);
+            log.info("Message sent, awaiting broker confirm: messageId={}, routingKey={}", msgLog.getMessageId(), routingKey);
         } catch (Exception e) {
             log.error("Failed to send message: messageId={}, will be retried", msgLog.getMessageId(), e);
         }
     }
 
-
     /**
-     * Send order to delay queue (for timeout detection).
+     * Send order to delay queue (for timeout detection). Status stays PENDING until broker ack.
+     * Called AFTER transaction commits.
      */
     public void sendDelayMessage(OrderMessageLog msgLog) {
         try {
-            rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, "order.delay", msgLog.getPayload(), message -> {
-                message.getMessageProperties().setHeader("messageId", msgLog.getMessageId());
-                return message;
-            });
-            msgLog.setStatus("SENT");
-            messageLogMapper.updateById(msgLog);
-            log.info("Delay message sent: messageId={}, orderId={}", msgLog.getMessageId(), msgLog.getOrderId());
+            CorrelationData correlationData = new CorrelationData(msgLog.getMessageId());
+            rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EXCHANGE, "order.delay", msgLog.getPayload(),
+                    message -> {
+                        message.getMessageProperties().setHeader("messageId", msgLog.getMessageId());
+                        return message;
+                    }, correlationData);
+            log.info("Delay message sent, awaiting broker confirm: messageId={}, orderId={}", msgLog.getMessageId(), msgLog.getOrderId());
         } catch (Exception e) {
-            log.error("Failed to send delay message: messageId={}", msgLog.getMessageId(), e);
+            log.error("Failed to send delay message: messageId={}, will be retried", msgLog.getMessageId(), e);
         }
     }
 }

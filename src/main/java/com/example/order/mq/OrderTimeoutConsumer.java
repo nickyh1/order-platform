@@ -5,10 +5,8 @@ import com.example.order.config.RabbitMQConfig;
 import com.example.order.inventory.service.InventoryService;
 import com.example.order.mq.entity.OrderMessageLog;
 import com.example.order.mq.mapper.OrderMessageLogMapper;
-import com.example.order.order.entity.OrderInfo;
 import com.example.order.order.entity.OrderStatus;
 import com.example.order.order.mapper.OrderMapper;
-import com.example.order.order.service.OrderService;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -23,7 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class OrderTimeoutConsumer {
 
-    private final OrderService orderService;
     private final OrderMapper orderMapper;
     private final InventoryService inventoryService;
     private final OrderMessageLogMapper messageLogMapper;
@@ -57,12 +54,10 @@ public class OrderTimeoutConsumer {
             Long productId = node.get("productId").asLong();
             int quantity = node.get("quantity").asInt();
 
-            // Check order status
-            OrderInfo order = orderService.getByOrderNo(orderNo);
-            OrderStatus currentStatus = OrderStatus.fromValue(order.getStatus());
-
-            if (currentStatus != OrderStatus.PENDING) {
-                log.info("Order {} already in state {}, skip timeout", orderNo, currentStatus);
+            // Conditional update: atomically transition PENDING -> TIMEOUT, prevents race with payment/cancel
+            int rows = orderMapper.updateStatusFromPending(orderNo, OrderStatus.TIMEOUT.getValue());
+            if (rows == 0) {
+                log.info("Order {} already processed, skip timeout", orderNo);
                 if (msgLog != null) {
                     msgLog.setStatus("CONSUMED");
                     messageLogMapper.updateById(msgLog);
@@ -70,9 +65,6 @@ public class OrderTimeoutConsumer {
                 return;
             }
 
-            // Timeout: update order + rollback stock
-            order.setStatus(OrderStatus.TIMEOUT.getValue());
-            orderMapper.updateById(order);
             inventoryService.rollbackStock(productId, quantity);
 
             // Mark consumed

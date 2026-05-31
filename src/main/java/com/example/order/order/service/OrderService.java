@@ -158,18 +158,17 @@ public class OrderService {
     public OrderInfo cancelOrder(String orderNo) {
         OrderInfo order = getByOrderNo(orderNo);
 
-        OrderStatus currentStatus = OrderStatus.fromValue(order.getStatus());
-        if (!currentStatus.canTransitTo(OrderStatus.CANCELLED)) {
-            throw new BusinessException(ResultCode.ORDER_STATUS_INVALID);
+        // Conditional update: only succeeds if order is still PENDING (prevents race with payment/timeout)
+        int rows = orderMapper.updateStatusFromPending(orderNo, OrderStatus.CANCELLED.getValue());
+        if (rows == 0) {
+            log.info("Order already processed, skip cancel: orderNo={}", orderNo);
+            return getByOrderNo(orderNo);
         }
 
-        // 1. Update order status
-        order.setStatus(OrderStatus.CANCELLED.getValue());
-
-        // 2. Rollback stock
         inventoryService.rollbackStock(order.getProductId(), order.getQuantity());
 
         log.info("Order cancelled: orderNo={}", orderNo);
+        order.setStatus(OrderStatus.CANCELLED.getValue());
         return order;
     }
 

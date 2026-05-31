@@ -6,6 +6,8 @@ import com.example.order.inventory.mapper.InventoryMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Slf4j
 @Component
@@ -56,10 +58,22 @@ public class RedisPreDeductStrategy implements StockDeductStrategy {
 
     @Override
     public void rollback(Long productId, int quantity) {
-        // Rollback both DB and Redis
+        // DB rollback inside transaction
         inventoryMapper.rollbackStock(productId, quantity);
-        stockCacheService.rollback(productId, quantity);
-        log.info("[Redis-Pre] Stock rolled back: productId={}, quantity={}", productId, quantity);
+        log.info("[Redis-Pre] DB stock rolled back: productId={}, quantity={}", productId, quantity);
+
+        // Redis INCR deferred to afterCommit: if DB transaction rolls back, Redis stays unchanged
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    stockCacheService.rollback(productId, quantity);
+                    log.info("[Redis-Pre] Redis stock restored after commit: productId={}, quantity={}", productId, quantity);
+                }
+            });
+        } else {
+            stockCacheService.rollback(productId, quantity);
+        }
     }
 
     @Override

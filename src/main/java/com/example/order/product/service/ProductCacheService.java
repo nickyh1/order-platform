@@ -3,9 +3,9 @@ package com.example.order.product.service;
 import com.example.order.product.entity.Product;
 import com.example.order.product.mapper.ProductMapper;
 import tools.jackson.databind.ObjectMapper;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.ibatis.annotations.Mapper;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -14,7 +14,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
-@Mapper
 @Service
 @RequiredArgsConstructor
 public class ProductCacheService {
@@ -22,34 +21,21 @@ public class ProductCacheService {
     private final StringRedisTemplate redisTemplate;
     private final ProductMapper productMapper;
     private final ObjectMapper objectMapper;
+
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor();
 
     private static final String CACHE_KEY_PREFIX = "product:detail:";
     private static final long CACHE_TTL_MINUTES = 30;
-    private final com.example.order.mq.OrderMessageProducer messageProducer;
 
-    /**
-     * Evict cache with MQ retry as fallback.
-     * If Redis delete fails, save a message to outbox table for retry.
-     */
-    public void evictCacheReliable(Long productId) {
-        try {
-            evictCache(productId);
-        } catch (Exception e) {
-            log.error("Failed to evict cache, sending retry message: productId={}", productId, e);
-            // Use message table as fallback, retry task will pick it up
-            messageProducer.saveMessageLog(
-                    productId,
-                    "CACHE_EVICT",
-                    java.util.Map.of("productId", productId)
-            );
-        }
+    @PreDestroy
+    public void destroy() {
+        scheduler.shutdown();
     }
 
     /**
      * Delayed double delete: delete now, then delete again after delay.
-     * Handles the race condition where a read thread caches stale data
+     * Mitigates the race condition where a read thread caches stale data
      * between our DB update and cache delete.
      */
     public void evictCacheWithDelay(Long productId) {
