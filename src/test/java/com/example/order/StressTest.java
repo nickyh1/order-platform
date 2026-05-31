@@ -6,6 +6,7 @@ import com.example.order.inventory.service.InventoryService;
 import com.example.order.order.entity.CreateOrderRequest;
 import com.example.order.order.service.OrderService;
 import com.example.order.monitor.OrderMetrics;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -15,6 +16,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
+@Disabled("Manual stress test — reset inventory and warm Redis cache before running; not for CI")
 @SpringBootTest
 public class StressTest {
 

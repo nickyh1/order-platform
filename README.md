@@ -166,25 +166,26 @@ PAID / CANCELLED / TIMEOUT 均为终态，不可再变
 
 ## 快速启动
 
-### 1. 启动基础设施
+### 一键启动（推荐）
 
 ```bash
-docker-compose up -d
+# 构建镜像并启动全部服务（含应用本身）
+docker compose up --build -d
+
+# 查看服务状态
+docker compose ps
+
+# 等应用健康检查通过后验证
+curl http://localhost:8080/actuator/health
 ```
 
-启动 MySQL、Redis、RabbitMQ、Prometheus、Grafana。
+Flyway 在应用启动时自动建表和初始化测试数据。
 
-### 2. 启动应用
+> **注意：** `StressTest` 为手工压测实验，不参与常规 `mvn test`，需手动准备库存数据后运行。
 
-```bash
-mvn spring-boot:run
-```
+### 验证
 
-Flyway 自动建表和初始化测试数据。
-
-### 3. 验证
-
-- 应用健康检查：http://localhost:8080/health
+- 应用健康检查：http://localhost:8080/actuator/health
 - Swagger API 文档：http://localhost:8080/swagger-ui.html
 - RabbitMQ 管理界面：http://localhost:15672 (guest/guest)
 - Prometheus：http://localhost:9090
@@ -204,6 +205,7 @@ Flyway 自动建表和初始化测试数据。
 | GET | /api/orders/user/{userId} | 我的订单（分页） |
 | GET | /api/orders/{orderNo} | 订单详情 |
 | POST | /api/orders/{orderNo}/cancel | 取消订单 |
+| POST | /api/orders/stress-test | 压测专用下单（自动生成 Token，仅本地实验，勿生产暴露） |
 | POST | /api/payment/callback | 支付回调（模拟） |
 
 ## 配置说明

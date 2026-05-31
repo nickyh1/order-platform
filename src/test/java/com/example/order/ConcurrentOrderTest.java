@@ -163,7 +163,10 @@ public class ConcurrentOrderTest {
                 "Successful orders (" + successCount.get() + ") must not exceed initial stock (" + initialStock + ")");
         assertTrue(inventory.getAvailableStock() >= 0,
                 "Available stock must not go negative");
-        assertEquals(initialStock, successCount.get() + inventory.getAvailableStock() + inventory.getLockedStock(),
-                "Stock accounting must balance: initial = sold + available + locked");
+        // Pending orders move stock from available to locked; total must be conserved
+        assertEquals(initialStock, inventory.getAvailableStock() + inventory.getLockedStock(),
+                "Stock accounting must balance: initial = available + locked (orders are still pending, not yet paid)");
+        assertEquals(successCount.get(), inventory.getLockedStock(),
+                "Each successful pending order must lock exactly one stock unit");
     }
 }
