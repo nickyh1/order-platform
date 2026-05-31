@@ -36,13 +36,23 @@ public class OrderCreatedConsumer {
                 return;
             }
 
-            // Process business logic
-            log.info("Processing ORDER_CREATED: {}", payload);
+            try {
+                // Process business logic
+                log.info("Processing ORDER_CREATED: {}", payload);
 
-            // Mark as consumed
-            messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
-                    .eq(OrderMessageLog::getMessageId, messageId)
-                    .set(OrderMessageLog::getStatus, "CONSUMED"));
+                // Mark as consumed
+                messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                        .eq(OrderMessageLog::getMessageId, messageId)
+                        .set(OrderMessageLog::getStatus, "CONSUMED"));
+            } catch (Exception e) {
+                // Roll CONSUMING back to FAILED so the retry task can re-deliver
+                messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                        .eq(OrderMessageLog::getMessageId, messageId)
+                        .eq(OrderMessageLog::getStatus, "CONSUMING")
+                        .set(OrderMessageLog::getStatus, "FAILED"));
+                log.error("Failed to process ORDER_CREATED, marked FAILED: messageId={}", messageId, e);
+                throw e;
+            }
         }
     }
 }

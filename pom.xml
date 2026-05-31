@@ -79,6 +79,12 @@
             <version>3.0.1</version>
         </dependency>
 
+        <!-- Actuator: provides /actuator/health, /actuator/prometheus endpoints -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
         <!-- Prometheus registry for Micrometer -->
         <dependency>
             <groupId>io.micrometer</groupId>
@@ -98,6 +104,11 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-amqp-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator-test</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>

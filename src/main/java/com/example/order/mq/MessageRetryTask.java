@@ -1,6 +1,7 @@
 package com.example.order.mq;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.order.config.RabbitMQConfig;
 import com.example.order.monitor.OrderMetrics;
 import com.example.order.mq.entity.OrderMessageLog;
@@ -32,7 +33,7 @@ public class MessageRetryTask {
     public void retryPendingMessages() {
         List<OrderMessageLog> pendingMessages = messageLogMapper.selectList(
                 new LambdaQueryWrapper<OrderMessageLog>()
-                        .in(OrderMessageLog::getStatus, "PENDING", "FAILED")
+                        .in(OrderMessageLog::getStatus, "PENDING", "FAILED", "RETURNED")
                         .le(OrderMessageLog::getNextRetryTime, LocalDateTime.now())
                         .lt(OrderMessageLog::getRetryCount, 3)
         );
@@ -55,24 +56,33 @@ public class MessageRetryTask {
                             return message;
                         }, correlationData);
 
-                // Only advance retry counter and next check time — SENT is set by MqConfirmCallback on ack
-                msg.setRetryCount(msg.getRetryCount() + 1);
-                msg.setNextRetryTime(LocalDateTime.now().plusSeconds(30L * (msg.getRetryCount() + 1)));
-                messageLogMapper.updateById(msg);
+                // Only update retry bookkeeping — never touch status here.
+                // status is owned by MqConfirmCallback (→ SENT) and ReturnsCallback (→ RETURNED).
+                // Using a targeted update avoids a race where updateById(msg) could overwrite a
+                // concurrent ConfirmCallback that already set status = SENT.
+                int newRetryCount = msg.getRetryCount() + 1;
+                LocalDateTime nextRetry = LocalDateTime.now().plusSeconds(30L * (newRetryCount + 1));
+                messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                        .eq(OrderMessageLog::getMessageId, msg.getMessageId())
+                        .set(OrderMessageLog::getRetryCount, newRetryCount)
+                        .set(OrderMessageLog::getNextRetryTime, nextRetry));
                 orderMetrics.getMessageRetryCounter().increment();
                 log.info("Retry sent, awaiting broker confirm: messageId={}, type={}, retryCount={}",
-                        msg.getMessageId(), msg.getMessageType(), msg.getRetryCount());
+                        msg.getMessageId(), msg.getMessageType(), newRetryCount);
 
             } catch (Exception e) {
-                msg.setRetryCount(msg.getRetryCount() + 1);
-                msg.setNextRetryTime(LocalDateTime.now().plusSeconds(30L * msg.getRetryCount()));
-
-                if (msg.getRetryCount() >= msg.getMaxRetry()) {
-                    msg.setStatus("FAILED");
+                int newRetryCount = msg.getRetryCount() + 1;
+                LocalDateTime nextRetry = LocalDateTime.now().plusSeconds(30L * newRetryCount);
+                LambdaUpdateWrapper<OrderMessageLog> errUpdate =
+                        new LambdaUpdateWrapper<OrderMessageLog>()
+                                .eq(OrderMessageLog::getMessageId, msg.getMessageId())
+                                .set(OrderMessageLog::getRetryCount, newRetryCount)
+                                .set(OrderMessageLog::getNextRetryTime, nextRetry);
+                if (newRetryCount >= msg.getMaxRetry()) {
+                    errUpdate.set(OrderMessageLog::getStatus, "FAILED");
                     log.error("Message exhausted max retries: messageId={}, type={}", msg.getMessageId(), msg.getMessageType());
                 }
-
-                messageLogMapper.updateById(msg);
+                messageLogMapper.update(null, errUpdate);
             }
         }
     }
