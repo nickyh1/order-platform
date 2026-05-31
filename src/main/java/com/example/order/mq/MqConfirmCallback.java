@@ -29,8 +29,10 @@ public class MqConfirmCallback implements RabbitTemplate.ConfirmCallback, Rabbit
         }
         String messageId = correlationData.getId();
         if (ack) {
+            // Only advance from PENDING/FAILED → SENT; never overwrite CONSUMED
             messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
                     .eq(OrderMessageLog::getMessageId, messageId)
+                    .in(OrderMessageLog::getStatus, "PENDING", "FAILED")
                     .set(OrderMessageLog::getStatus, "SENT"));
             log.info("[MQ-Confirm] Broker ack, message marked SENT: messageId={}", messageId);
         } else {
@@ -42,8 +44,18 @@ public class MqConfirmCallback implements RabbitTemplate.ConfirmCallback, Rabbit
     @Override
     public void returnedMessage(ReturnedMessage returned) {
         String messageId = (String) returned.getMessage().getMessageProperties().getHeader("messageId");
-        // Keep status PENDING so retry task picks it up
-        log.warn("[MQ-Return] Message unroutable, retry task will handle: messageId={}, exchange={}, routingKey={}, replyText={}",
+        if (messageId == null) {
+            log.warn("[MQ-Return] Message unroutable but messageId is null, exchange={}, routingKey={}",
+                    returned.getExchange(), returned.getRoutingKey());
+            return;
+        }
+        // Message reached the exchange but couldn't be routed to any queue; reset to PENDING
+        // so the retry task re-sends it, and push next_retry_time to avoid immediate re-fire.
+        messageLogMapper.update(null, new LambdaUpdateWrapper<OrderMessageLog>()
+                .eq(OrderMessageLog::getMessageId, messageId)
+                .setSql("next_retry_time = DATE_ADD(NOW(), INTERVAL 30 SECOND)")
+                .set(OrderMessageLog::getStatus, "PENDING"));
+        log.warn("[MQ-Return] Message unroutable, reset to PENDING: messageId={}, exchange={}, routingKey={}, replyText={}",
                 messageId, returned.getExchange(), returned.getRoutingKey(), returned.getReplyText());
     }
 }
